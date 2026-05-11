@@ -1,6 +1,7 @@
 package middleware
 
 import (
+	"context"
 	"crypto/sha256"
 	"fmt"
 	"net/http"
@@ -10,16 +11,10 @@ import (
 )
 
 type TokenValidator interface {
-	ValidateToken(ctx interface{ Value(interface{}) interface{} }, tokenHash string) (hostID string, ok bool)
+	ValidateToken(ctx context.Context, tokenHash string) (hostID string, ok bool)
 }
 
-type contextKey string
-
-const HostIDKey contextKey = "host_id"
-
-func Auth(pg interface {
-	ValidateToken(ctx interface{ Value(interface{}) interface{} }, tokenHash string) (string, bool)
-}) gin.HandlerFunc {
+func Auth(pg TokenValidator) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		header := c.GetHeader("Authorization")
 		if !strings.HasPrefix(header, "Bearer ") {

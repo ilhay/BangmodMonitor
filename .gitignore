@@ -1,6 +1,5 @@
 # Go
 */vendor/
-**/go.sum
 *.exe
 *.exe~
 bangmod-agent
