@@ -1,21 +1,20 @@
-version: '3.9'
-
 services:
 
-  postgres:
-    image: postgres:16-alpine
+  mariadb:
+    image: mariadb:11-noble
     environment:
-      POSTGRES_USER: bangmod
-      POSTGRES_PASSWORD: bangmod
-      POSTGRES_DB: bangmod
+      MARIADB_ROOT_PASSWORD: rootpass
+      MARIADB_DATABASE: bangmod
+      MARIADB_USER: bangmod
+      MARIADB_PASSWORD: bangmod
     volumes:
-      - pg_data:/var/lib/postgresql/data
+      - maria_data:/var/lib/mysql
     ports:
-      - "5432:5432"
+      - "3307:3306"
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U bangmod"]
+      test: ["CMD", "healthcheck.sh", "--connect", "--innodb_initialized"]
       interval: 5s
-      retries: 10
+      retries: 15
 
   clickhouse:
     image: clickhouse/clickhouse-server:24.6-alpine
@@ -39,12 +38,12 @@ services:
       dockerfile: Dockerfile
     environment:
       HTTP_PORT: "8080"
-      POSTGRES_DSN: "postgres://bangmod:bangmod@postgres:5432/bangmod?sslmode=disable"
+      MARIADB_DSN: "bangmod:bangmod@tcp(mariadb:3306)/bangmod?parseTime=true&charset=utf8mb4"
       CLICKHOUSE_DSN: "clickhouse://default:@clickhouse:9000/bangmod"
     ports:
       - "8080:8080"
     depends_on:
-      postgres:
+      mariadb:
         condition: service_healthy
       clickhouse:
         condition: service_healthy
@@ -73,5 +72,5 @@ services:
       - api
 
 volumes:
-  pg_data:
+  maria_data:
   ch_data:

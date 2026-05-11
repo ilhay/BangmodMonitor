@@ -16,14 +16,14 @@ func main() {
 	cfg := config.Load()
 	ctx := context.Background()
 
-	pg, err := storage.NewPG(ctx, cfg.PostgresDSN)
+	maria, err := storage.NewMaria(ctx, cfg.MariaDSN)
 	if err != nil {
-		log.Fatalf("postgres: %v", err)
+		log.Fatalf("mariadb: %v", err)
 	}
-	defer pg.Close()
+	defer maria.Close()
 
-	if err := pg.Migrate(ctx); err != nil {
-		log.Fatalf("postgres migrate: %v", err)
+	if err := maria.Migrate(ctx); err != nil {
+		log.Fatalf("mariadb migrate: %v", err)
 	}
 
 	ch, err := storage.NewCH(ctx, cfg.ClickHouseDSN)
@@ -45,7 +45,7 @@ func main() {
 	v1 := r.Group("/api/v1")
 	{
 		// Agent ingest — requires valid agent token
-		v1.POST("/ingest", middleware.Auth(pg), handler.NewIngest(ch).Handle)
+		v1.POST("/ingest", middleware.Auth(maria), handler.NewIngest(ch).Handle)
 
 		// Dashboard queries — open in Phase 1, will add auth in Phase 3
 		v1.GET("/metrics/:hostId", handler.NewMetrics(ch).Recent)

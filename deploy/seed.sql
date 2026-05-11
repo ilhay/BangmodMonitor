@@ -1,16 +1,20 @@
 -- Run this to create a test host and get its token for agent testing
--- Token: "test-token-phase1" → SHA-256 hash below
--- Use AGENT_TOKEN=test-token-phase1 when running the agent
+-- Plain token: "test-token-phase1"
+-- SHA-256 hash below was generated from that token.
+-- Use AGENT_TOKEN=test-token-phase1 when running the agent.
 
-INSERT INTO hosts (name, token_hash, region)
+INSERT IGNORE INTO hosts (id, name, token_hash, region)
 VALUES (
+  '11111111-1111-1111-1111-111111111111',
   'test-server-01',
-  'b5a2af5d4a7d3c1e8f6e9b0c2d4f6a8b1c3e5d7f9a0b2c4e6f8a0b2c4d6e8f0',
+  'ff25781968f85f2c2642f4243cef69e9b059ee0ba6b4d38d6124e07d5788d869',
   'default'
-)
-ON CONFLICT (token_hash) DO NOTHING;
+);
 
--- To generate a real token hash in Go:
--- import "crypto/sha256"; import "fmt"
--- sum := sha256.Sum256([]byte("your-token"))
--- fmt.Printf("%x", sum)
+-- To generate a token hash in PowerShell:
+--   $bytes = [System.Text.Encoding]::UTF8.GetBytes("your-token")
+--   $sha = [System.Security.Cryptography.SHA256]::Create().ComputeHash($bytes)
+--   ($sha | ForEach-Object { $_.ToString("x2") }) -join ""
+--
+-- Or in Bash:
+--   echo -n "your-token" | sha256sum
