@@ -42,19 +42,42 @@ func main() {
 		c.JSON(http.StatusOK, gin.H{"status": "ok"})
 	})
 
+	authHandler  := handler.NewAuth(maria, cfg.JWTSecret)
 	probeHandler := handler.NewProbe(ch, cfg.NodeSecret)
+	hostHandler  := handler.NewHost(maria, ch)
 
 	v1 := r.Group("/api/v1")
 	{
-		// Agent ingest — requires valid agent token
+		// Public auth routes
+		auth := v1.Group("/auth")
+		{
+			auth.POST("/register", authHandler.Register)
+			auth.POST("/login", authHandler.Login)
+		}
+
+		// Agent ingest — Bearer agent token
 		v1.POST("/ingest", middleware.Auth(maria), handler.NewIngest(ch).Handle)
 
-		// Probe node ingest — validated by NODE_SECRET header
+		// Probe node ingest — NODE_SECRET header
 		v1.POST("/probe", probeHandler.Ingest)
-
-		// Dashboard queries — open in Phase 1, auth added in Phase 3
-		v1.GET("/metrics/:hostId", handler.NewMetrics(ch).Recent)
 		v1.GET("/probe/results", probeHandler.Recent)
+
+		// Customer routes — JWT required
+		customer := v1.Group("/")
+		customer.Use(middleware.RequireAuth(cfg.JWTSecret))
+		{
+			customer.GET("/me", authHandler.Me)
+
+			// Host management
+			hosts := customer.Group("/hosts")
+			{
+				hosts.GET("", hostHandler.List)
+				hosts.POST("", hostHandler.Create)
+				hosts.DELETE("/:id", hostHandler.Delete)
+				hosts.POST("/:id/rotate", hostHandler.RotateToken)
+				hosts.GET("/:id/metrics", hostHandler.Metrics)
+			}
+		}
 	}
 
 	log.Printf("API server listening on :%s", cfg.HTTPPort)

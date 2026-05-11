@@ -11,7 +11,7 @@ import (
 )
 
 type TokenValidator interface {
-	ValidateToken(ctx context.Context, tokenHash string) (hostID string, ok bool)
+	ValidateToken(ctx context.Context, tokenHash string) (hostID, orgID string, ok bool)
 }
 
 func Auth(pg TokenValidator) gin.HandlerFunc {
@@ -25,13 +25,14 @@ func Auth(pg TokenValidator) gin.HandlerFunc {
 		token := strings.TrimPrefix(header, "Bearer ")
 		hash := hashToken(token)
 
-		hostID, ok := pg.ValidateToken(c.Request.Context(), hash)
+		hostID, orgID, ok := pg.ValidateToken(c.Request.Context(), hash)
 		if !ok {
 			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "invalid token"})
 			return
 		}
 
 		c.Set("host_id", hostID)
+		c.Set("org_id", orgID)
 		c.Next()
 	}
 }
