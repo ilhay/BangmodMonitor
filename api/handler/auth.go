@@ -14,10 +14,17 @@ import (
 type AuthHandler struct {
 	maria     *storage.Maria
 	jwtSecret string
+	stripe    interface {
+		Enabled() bool
+		CreateCustomer(email, orgName string) (string, error)
+	}
 }
 
-func NewAuth(maria *storage.Maria, jwtSecret string) *AuthHandler {
-	return &AuthHandler{maria: maria, jwtSecret: jwtSecret}
+func NewAuth(maria *storage.Maria, jwtSecret string, stripe interface {
+	Enabled() bool
+	CreateCustomer(email, orgName string) (string, error)
+}) *AuthHandler {
+	return &AuthHandler{maria: maria, jwtSecret: jwtSecret, stripe: stripe}
 }
 
 type registerReq struct {
@@ -60,6 +67,20 @@ func (h *AuthHandler) Register(c *gin.Context) {
 	if err := h.maria.CreateUser(c.Request.Context(), userID, orgID, req.Email, string(hash), "admin"); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "create user failed"})
 		return
+	}
+
+	// Assign free plan subscription
+	subID := uuid.New().String()
+	_ = h.maria.CreateSubscription(c.Request.Context(), subID, orgID, "plan-free")
+
+	// Auto-enable 1 default region (th)
+	_ = h.maria.AddOrgRegion(c.Request.Context(), uuid.New().String(), orgID, "th")
+
+	// Create Stripe customer if configured
+	if h.stripe.Enabled() {
+		if stripeCustomerID, err := h.stripe.CreateCustomer(req.Email, req.OrgName); err == nil {
+			_ = h.maria.UpdateSubscriptionStripe(c.Request.Context(), orgID, stripeCustomerID, "", "active", nil, false)
+		}
 	}
 
 	token, err := h.issueJWT(userID, orgID, req.Email, "admin")

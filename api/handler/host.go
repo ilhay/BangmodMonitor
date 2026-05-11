@@ -47,6 +47,24 @@ func (h *HostHandler) Create(c *gin.Context) {
 		return
 	}
 
+	// Enforce plan host limit
+	sub, _ := h.maria.GetSubscription(c.Request.Context(), orgID)
+	if sub != nil {
+		plan, _ := h.maria.GetPlan(c.Request.Context(), sub.PlanID)
+		if plan != nil {
+			hostCount, _ := h.maria.CountActiveHosts(c.Request.Context(), orgID)
+			if hostCount >= plan.HostLimit {
+				c.JSON(http.StatusPaymentRequired, gin.H{
+					"error":      "host limit reached for your plan",
+					"limit":      plan.HostLimit,
+					"current":    hostCount,
+					"upgrade_to": "starter",
+				})
+				return
+			}
+		}
+	}
+
 	plainToken, tokenHash, err := generateToken()
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "token generation failed"})

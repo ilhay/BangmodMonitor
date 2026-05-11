@@ -5,6 +5,7 @@ import (
 	"log"
 	"net/http"
 
+	"github.com/bangmodmonitor/api/billing"
 	"github.com/bangmodmonitor/api/config"
 	"github.com/bangmodmonitor/api/handler"
 	"github.com/bangmodmonitor/api/middleware"
@@ -36,15 +37,24 @@ func main() {
 		log.Fatalf("clickhouse migrate: %v", err)
 	}
 
+	stripeSvc := billing.NewStripe(cfg.StripeSecretKey, cfg.StripeWebhookSecret, cfg.StripeRegionPriceID)
+	if stripeSvc.Enabled() {
+		log.Println("Stripe integration: enabled")
+	} else {
+		log.Println("Stripe integration: disabled (set STRIPE_SECRET_KEY to enable)")
+	}
+
+	authHandler    := handler.NewAuth(maria, cfg.JWTSecret, stripeSvc)
+	probeHandler   := handler.NewProbe(ch, cfg.NodeSecret)
+	hostHandler    := handler.NewHost(maria, ch)
+	billingHandler := handler.NewBilling(maria, stripeSvc, cfg.AppBaseURL, cfg.StripeStarterPriceID, cfg.StripeProPriceID)
+	adminHandler   := handler.NewAdmin(maria)
+
 	r := gin.Default()
 
 	r.GET("/health", func(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{"status": "ok"})
 	})
-
-	authHandler  := handler.NewAuth(maria, cfg.JWTSecret)
-	probeHandler := handler.NewProbe(ch, cfg.NodeSecret)
-	hostHandler  := handler.NewHost(maria, ch)
 
 	v1 := r.Group("/api/v1")
 	{
@@ -54,6 +64,9 @@ func main() {
 			auth.POST("/register", authHandler.Register)
 			auth.POST("/login", authHandler.Login)
 		}
+
+		// Stripe webhook — must be public (no JWT), raw body needed
+		v1.POST("/billing/webhook", billingHandler.Webhook)
 
 		// Agent ingest — Bearer agent token
 		v1.POST("/ingest", middleware.Auth(maria), handler.NewIngest(ch).Handle)
@@ -76,6 +89,25 @@ func main() {
 				hosts.DELETE("/:id", hostHandler.Delete)
 				hosts.POST("/:id/rotate", hostHandler.RotateToken)
 				hosts.GET("/:id/metrics", hostHandler.Metrics)
+			}
+
+			// Billing
+			bill := customer.Group("/billing")
+			{
+				bill.GET("/overview", billingHandler.Overview)
+				bill.POST("/checkout", billingHandler.Checkout)
+				bill.POST("/portal", billingHandler.Portal)
+				bill.GET("/regions", billingHandler.GetRegions)
+				bill.POST("/regions/:region", billingHandler.AddRegion)
+				bill.DELETE("/regions/:region", billingHandler.RemoveRegion)
+				bill.GET("/invoices", billingHandler.Invoices)
+			}
+
+			// Admin — superadmin role enforced inside handlers
+			admin := customer.Group("/admin")
+			{
+				admin.GET("/orgs", adminHandler.ListOrgs)
+				admin.GET("/stats", adminHandler.Stats)
 			}
 		}
 	}

@@ -58,7 +58,10 @@ export default function Hosts() {
     <div className="container">
       <div className="header">
         <h1>BangmodMonitor</h1>
-        <button onClick={() => { clearToken(); nav('/login') }} style={{ marginLeft: 'auto', background: 'none', border: '1px solid #334155', borderRadius: 6, color: '#94a3b8', padding: '6px 12px', cursor: 'pointer' }}>
+        <Link to="/billing" style={{ marginLeft: 'auto', background: 'none', border: '1px solid #334155', borderRadius: 6, color: '#94a3b8', padding: '6px 12px', textDecoration: 'none', fontSize: '0.875rem' }}>
+          Billing
+        </Link>
+        <button onClick={() => { clearToken(); nav('/login') }} style={{ marginLeft: 8, background: 'none', border: '1px solid #334155', borderRadius: 6, color: '#94a3b8', padding: '6px 12px', cursor: 'pointer' }}>
           Sign out
         </button>
       </div>

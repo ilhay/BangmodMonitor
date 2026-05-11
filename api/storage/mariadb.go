@@ -72,6 +72,61 @@ func (m *Maria) Migrate(ctx context.Context) error {
 
 		// Add org_id column to hosts if missing (safe on existing installs)
 		`ALTER TABLE hosts ADD COLUMN IF NOT EXISTS org_id CHAR(36) AFTER id`,
+
+		// ── Billing tables ────────────────────────────────────────────────────
+		`CREATE TABLE IF NOT EXISTS plans (
+			id                  CHAR(36) NOT NULL PRIMARY KEY,
+			name                VARCHAR(64) NOT NULL,
+			description         VARCHAR(255) NOT NULL DEFAULT '',
+			base_price_cents    INT NOT NULL DEFAULT 0,
+			host_limit          INT NOT NULL DEFAULT 1,
+			regions_included    INT NOT NULL DEFAULT 1,
+			region_price_cents  INT NOT NULL DEFAULT 1000,
+			stripe_price_id     VARCHAR(255) NOT NULL DEFAULT '',
+			is_active           TINYINT(1) NOT NULL DEFAULT 1
+		) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
+
+		`CREATE TABLE IF NOT EXISTS subscriptions (
+			id                      CHAR(36) NOT NULL PRIMARY KEY,
+			org_id                  CHAR(36) NOT NULL,
+			plan_id                 CHAR(36) NOT NULL,
+			stripe_customer_id      VARCHAR(255) NOT NULL DEFAULT '',
+			stripe_subscription_id  VARCHAR(255) NOT NULL DEFAULT '',
+			status                  VARCHAR(32) NOT NULL DEFAULT 'active',
+			current_period_end      TIMESTAMP NULL DEFAULT NULL,
+			cancel_at_period_end    TINYINT(1) NOT NULL DEFAULT 0,
+			created_at              TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+			UNIQUE KEY uniq_org (org_id),
+			KEY idx_stripe_sub (stripe_subscription_id)
+		) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
+
+		`CREATE TABLE IF NOT EXISTS org_regions (
+			id         CHAR(36) NOT NULL PRIMARY KEY,
+			org_id     CHAR(36) NOT NULL,
+			region     VARCHAR(64) NOT NULL,
+			added_at   TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+			UNIQUE KEY uniq_org_region (org_id, region),
+			KEY idx_org (org_id)
+		) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
+
+		`CREATE TABLE IF NOT EXISTS invoices (
+			id                CHAR(36) NOT NULL PRIMARY KEY,
+			org_id            CHAR(36) NOT NULL,
+			stripe_invoice_id VARCHAR(255) NOT NULL DEFAULT '',
+			amount_cents      INT NOT NULL DEFAULT 0,
+			currency          VARCHAR(3) NOT NULL DEFAULT 'usd',
+			status            VARCHAR(32) NOT NULL DEFAULT 'paid',
+			period_start      TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+			period_end        TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+			created_at        TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+			KEY idx_org (org_id)
+		) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
+
+		// Seed default plans (INSERT IGNORE = idempotent)
+		`INSERT IGNORE INTO plans (id, name, description, base_price_cents, host_limit, regions_included, region_price_cents) VALUES
+			('plan-free',    'Free',    '1 host, 1 region',         0,    1,  1, 1000),
+			('plan-starter', 'Starter', '10 hosts, 1 region',    1900,   10,  1, 1000),
+			('plan-pro',     'Pro',     '50 hosts, 3 regions',   4900,   50,  3,  800)`,
 	}
 	for _, s := range stmts {
 		if _, err := m.db.ExecContext(ctx, s); err != nil {
