@@ -1,11 +1,17 @@
-FROM node:20-alpine AS builder
+FROM oven/bun:1 AS builder
 WORKDIR /app
-COPY package.json package-lock.json* ./
-RUN npm install
+COPY package.json bun.lockb* ./
+RUN bun install --frozen-lockfile
 COPY . .
-RUN npm run build
+ENV NEXT_TELEMETRY_DISABLED=1
+RUN bun run build
 
-FROM nginx:alpine
-COPY --from=builder /app/dist /usr/share/nginx/html
-COPY nginx.conf /etc/nginx/conf.d/default.conf
-EXPOSE 80
+FROM oven/bun:1-slim AS runner
+WORKDIR /app
+ENV NODE_ENV=production
+ENV NEXT_TELEMETRY_DISABLED=1
+COPY --from=builder /app/.next/standalone ./
+COPY --from=builder /app/.next/static ./.next/static
+COPY --from=builder /app/public ./public
+EXPOSE 3000
+CMD ["bun", "server.js"]
