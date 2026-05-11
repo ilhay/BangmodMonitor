@@ -1,0 +1,77 @@
+version: '3.9'
+
+services:
+
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: bangmod
+      POSTGRES_PASSWORD: bangmod
+      POSTGRES_DB: bangmod
+    volumes:
+      - pg_data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U bangmod"]
+      interval: 5s
+      retries: 10
+
+  clickhouse:
+    image: clickhouse/clickhouse-server:24.6-alpine
+    environment:
+      CLICKHOUSE_DB: bangmod
+      CLICKHOUSE_USER: default
+      CLICKHOUSE_PASSWORD: ""
+    volumes:
+      - ch_data:/var/lib/clickhouse
+    ports:
+      - "9000:9000"
+      - "8123:8123"
+    healthcheck:
+      test: ["CMD", "clickhouse-client", "--query", "SELECT 1"]
+      interval: 5s
+      retries: 10
+
+  api:
+    build:
+      context: ../api
+      dockerfile: Dockerfile
+    environment:
+      HTTP_PORT: "8080"
+      POSTGRES_DSN: "postgres://bangmod:bangmod@postgres:5432/bangmod?sslmode=disable"
+      CLICKHOUSE_DSN: "clickhouse://default:@clickhouse:9000/bangmod"
+    ports:
+      - "8080:8080"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      clickhouse:
+        condition: service_healthy
+
+  dashboard:
+    build:
+      context: ../dashboard
+      dockerfile: Dockerfile
+    ports:
+      - "3000:80"
+    depends_on:
+      - api
+
+  # Example probe node (TH region) — deploy separately per region in production
+  probe-th:
+    build:
+      context: ../probe
+      dockerfile: Dockerfile
+    environment:
+      API_URL: "http://api:8080"
+      NODE_SECRET: "probe-secret-change-me"
+      PROBE_REGION: "th"
+      PROBE_INTERVAL: "60"
+      PROBE_TARGETS: "https://google.com,https://cloudflare.com"
+    depends_on:
+      - api
+
+volumes:
+  pg_data:
+  ch_data:
