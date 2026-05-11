@@ -42,13 +42,19 @@ func main() {
 		c.JSON(http.StatusOK, gin.H{"status": "ok"})
 	})
 
+	probeHandler := handler.NewProbe(ch, cfg.NodeSecret)
+
 	v1 := r.Group("/api/v1")
 	{
 		// Agent ingest — requires valid agent token
 		v1.POST("/ingest", middleware.Auth(maria), handler.NewIngest(ch).Handle)
 
-		// Dashboard queries — open in Phase 1, will add auth in Phase 3
+		// Probe node ingest — validated by NODE_SECRET header
+		v1.POST("/probe", probeHandler.Ingest)
+
+		// Dashboard queries — open in Phase 1, auth added in Phase 3
 		v1.GET("/metrics/:hostId", handler.NewMetrics(ch).Recent)
+		v1.GET("/probe/results", probeHandler.Recent)
 	}
 
 	log.Printf("API server listening on :%s", cfg.HTTPPort)

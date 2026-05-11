@@ -205,6 +205,50 @@ func (ch *CH) QueryRecentMetrics(ctx context.Context, hostID string, limit int) 
 	return points, rows.Err()
 }
 
+type ProbeResult struct {
+	Timestamp  time.Time `json:"timestamp"`
+	TargetURL  string    `json:"url"`
+	Region     string    `json:"region"`
+	StatusCode uint16    `json:"status_code"`
+	ResponseMS uint32    `json:"response_ms"`
+	IsUp       bool      `json:"is_up"`
+}
+
+func (ch *CH) QueryProbeResults(ctx context.Context, url, region string, limit int) ([]ProbeResult, error) {
+	query := `SELECT timestamp, target_url, region, status_code, response_ms, is_up
+			  FROM bangmod.probe_results
+			  WHERE 1=1`
+	args := []any{}
+	if url != "" {
+		query += ` AND target_url = ?`
+		args = append(args, url)
+	}
+	if region != "" {
+		query += ` AND region = ?`
+		args = append(args, region)
+	}
+	query += ` ORDER BY timestamp DESC LIMIT ?`
+	args = append(args, limit)
+
+	rows, err := ch.conn.Query(ctx, query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var results []ProbeResult
+	for rows.Next() {
+		var r ProbeResult
+		var isUp uint8
+		if err := rows.Scan(&r.Timestamp, &r.TargetURL, &r.Region, &r.StatusCode, &r.ResponseMS, &isUp); err != nil {
+			return nil, err
+		}
+		r.IsUp = isUp == 1
+		results = append(results, r)
+	}
+	return results, rows.Err()
+}
+
 func (ch *CH) Close() error {
 	return ch.conn.Close()
 }
