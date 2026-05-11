@@ -11,6 +11,20 @@ VALUES (
   'default'
 );
 
+-- Example alert rules (insert after setting up hosts)
+-- Slack alert: CPU > 80% for 60s on test-server-01
+-- INSERT INTO alert_rules (id, name, host_id, condition_type, threshold, duration_sec, channel, channel_config)
+-- VALUES (UUID(), 'High CPU on test-server-01',
+--   '11111111-1111-1111-1111-111111111111',
+--   'cpu_high', 80, 60, 'slack',
+--   '{"webhook_url":"https://hooks.slack.com/services/YOUR/SLACK/WEBHOOK"}');
+
+-- Telegram alert: probe down for google.com
+-- INSERT INTO alert_rules (id, name, condition_type, threshold, duration_sec, target_url, channel, channel_config)
+-- VALUES (UUID(), 'google.com down',
+--   'probe_down', 0, 120, 'https://google.com', 'telegram',
+--   '{"bot_token":"YOUR_BOT_TOKEN","chat_id":"YOUR_CHAT_ID"}');
+
 -- To generate a token hash in PowerShell:
 --   $bytes = [System.Text.Encoding]::UTF8.GetBytes("your-token")
 --   $sha = [System.Security.Cryptography.SHA256]::Create().ComputeHash($bytes)

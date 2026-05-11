@@ -3,9 +3,12 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"log"
 	"net/http"
 	"os"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/bangmodmonitor/probe/checker"
@@ -19,55 +22,63 @@ func main() {
 		log.Fatal("NODE_SECRET is required")
 	}
 
-	// Phase 1: targets loaded from env (comma-separated URLs)
-	// Phase 3+: pulled from API based on customer subscriptions
-	targets := loadTargets()
-	if len(targets) == 0 {
-		log.Fatal("No probe targets. Set PROBE_TARGETS=https://example.com,https://example2.com")
+	httpTargets := loadEnvList("PROBE_TARGETS")
+	tcpTargets := loadTCPTargets("PROBE_TCP_TARGETS") // format: host:port,host:port
+
+	if len(httpTargets) == 0 && len(tcpTargets) == 0 {
+		log.Fatal("No targets. Set PROBE_TARGETS and/or PROBE_TCP_TARGETS")
 	}
 
-	log.Printf("Probe node started | region=%s targets=%d interval=%ds",
-		cfg.Region, len(targets), cfg.Interval)
+	log.Printf("Probe node started | region=%s http=%d tcp=%d interval=%ds",
+		cfg.Region, len(httpTargets), len(tcpTargets), cfg.Interval)
 
 	ticker := time.NewTicker(time.Duration(cfg.Interval) * time.Second)
 	defer ticker.Stop()
 
-	runChecks(cfg, targets)
+	runChecks(cfg, httpTargets, tcpTargets)
 	for range ticker.C {
-		runChecks(cfg, targets)
+		runChecks(cfg, httpTargets, tcpTargets)
 	}
 }
 
-func loadTargets() []string {
-	raw := os.Getenv("PROBE_TARGETS")
+type tcpTarget struct {
+	host string
+	port int
+}
+
+func loadEnvList(key string) []string {
+	raw := os.Getenv(key)
 	if raw == "" {
 		return nil
 	}
-	var targets []string
-	for _, t := range splitCSV(raw) {
-		if t != "" {
-			targets = append(targets, t)
+	var out []string
+	for _, s := range strings.Split(raw, ",") {
+		if s = strings.TrimSpace(s); s != "" {
+			out = append(out, s)
 		}
 	}
-	return targets
+	return out
 }
 
-func splitCSV(s string) []string {
-	var result []string
-	start := 0
-	for i := 0; i < len(s); i++ {
-		if s[i] == ',' {
-			result = append(result, s[start:i])
-			start = i + 1
+func loadTCPTargets(key string) []tcpTarget {
+	var out []tcpTarget
+	for _, s := range loadEnvList(key) {
+		parts := strings.SplitN(s, ":", 2)
+		if len(parts) != 2 {
+			continue
 		}
+		port, err := strconv.Atoi(parts[1])
+		if err != nil {
+			continue
+		}
+		out = append(out, tcpTarget{host: parts[0], port: port})
 	}
-	result = append(result, s[start:])
-	return result
+	return out
 }
 
 type probePayload struct {
-	Region     string         `json:"region"`
-	Results    []probeResult  `json:"results"`
+	Region  string        `json:"region"`
+	Results []probeResult `json:"results"`
 }
 
 type probeResult struct {
@@ -78,22 +89,37 @@ type probeResult struct {
 	Error      string `json:"error,omitempty"`
 }
 
-func runChecks(cfg *config.Config, targets []string) {
+func runChecks(cfg *config.Config, httpTargets []string, tcpTargets []tcpTarget) {
 	var results []probeResult
-	for _, url := range targets {
+
+	for _, url := range httpTargets {
 		r := checker.CheckHTTP(url)
-		results = append(results, probeResult{
-			URL:        r.URL,
-			StatusCode: r.StatusCode,
-			ResponseMS: r.ResponseMS,
-			IsUp:       r.IsUp,
-			Error:      r.Error,
-		})
 		status := "UP"
 		if !r.IsUp {
 			status = "DOWN"
 		}
-		log.Printf("[%s] %s %s %dms", cfg.Region, url, status, r.ResponseMS)
+		log.Printf("[%s] HTTP %s %s %dms", cfg.Region, url, status, r.ResponseMS)
+		results = append(results, probeResult{
+			URL: url, StatusCode: r.StatusCode,
+			ResponseMS: r.ResponseMS, IsUp: r.IsUp, Error: r.Error,
+		})
+	}
+
+	for _, t := range tcpTargets {
+		r := checker.CheckTCP(t.host, t.port)
+		url := fmt.Sprintf("tcp://%s:%d", t.host, t.port)
+		status := "UP"
+		if !r.IsUp {
+			status = "DOWN"
+		}
+		log.Printf("[%s] TCP %s %s %dms", cfg.Region, url, status, r.ResponseMS)
+		results = append(results, probeResult{
+			URL: url, ResponseMS: r.ResponseMS, IsUp: r.IsUp, Error: r.Error,
+		})
+	}
+
+	if len(results) == 0 {
+		return
 	}
 
 	payload, _ := json.Marshal(probePayload{Region: cfg.Region, Results: results})

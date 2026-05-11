@@ -57,7 +57,21 @@ services:
     depends_on:
       - api
 
-  # Example probe node (TH region) — deploy separately per region in production
+  alerter:
+    build:
+      context: ../alerter
+      dockerfile: Dockerfile
+    environment:
+      MARIADB_DSN: "bangmod:bangmod@tcp(mariadb:3306)/bangmod?parseTime=true&charset=utf8mb4"
+      CLICKHOUSE_DSN: "clickhouse://default:@clickhouse:9000/bangmod"
+      EVAL_INTERVAL: "60"
+    depends_on:
+      mariadb:
+        condition: service_healthy
+      clickhouse:
+        condition: service_healthy
+
+  # Probe nodes — deploy one container per region in production
   probe-th:
     build:
       context: ../probe
@@ -68,6 +82,35 @@ services:
       PROBE_REGION: "th"
       PROBE_INTERVAL: "60"
       PROBE_TARGETS: "https://google.com,https://cloudflare.com"
+      PROBE_TCP_TARGETS: "google.com:443,cloudflare.com:443"
+    depends_on:
+      - api
+
+  probe-sg:
+    build:
+      context: ../probe
+      dockerfile: Dockerfile
+    environment:
+      API_URL: "http://api:8080"
+      NODE_SECRET: "probe-secret-change-me"
+      PROBE_REGION: "sg"
+      PROBE_INTERVAL: "60"
+      PROBE_TARGETS: "https://google.com,https://cloudflare.com"
+      PROBE_TCP_TARGETS: "google.com:443,cloudflare.com:443"
+    depends_on:
+      - api
+
+  probe-hk:
+    build:
+      context: ../probe
+      dockerfile: Dockerfile
+    environment:
+      API_URL: "http://api:8080"
+      NODE_SECRET: "probe-secret-change-me"
+      PROBE_REGION: "hk"
+      PROBE_INTERVAL: "60"
+      PROBE_TARGETS: "https://google.com,https://cloudflare.com"
+      PROBE_TCP_TARGETS: "google.com:443,cloudflare.com:443"
     depends_on:
       - api
 
