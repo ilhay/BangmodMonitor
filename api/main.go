@@ -11,6 +11,7 @@ import (
 	"github.com/bangmodmonitor/api/grpcserver"
 	"github.com/bangmodmonitor/api/handler"
 	"github.com/bangmodmonitor/api/middleware"
+	"github.com/bangmodmonitor/api/mq"
 	"github.com/bangmodmonitor/api/storage"
 	"github.com/gin-gonic/gin"
 )
@@ -59,14 +60,26 @@ func main() {
 		log.Println("Stripe integration: disabled (set STRIPE_SECRET_KEY to enable)")
 	}
 
+	// Redpanda producer (optional — disabled when REDPANDA_BROKERS is empty)
+	producer, err := mq.NewProducer(cfg.RedpandaBrokers)
+	if err != nil {
+		log.Fatalf("redpanda producer: %v", err)
+	}
+	defer producer.Close()
+	if producer.Enabled() {
+		log.Printf("Redpanda producer: connected to %v", cfg.RedpandaBrokers)
+	} else {
+		log.Println("Redpanda producer: disabled (set REDPANDA_BROKERS to enable)")
+	}
+
 	// gRPC server (runs alongside HTTP on a separate port)
 	if cfg.GRPCPort != "" {
-		grpcSrv := grpcserver.New(ch, maria, tokenCache, cfg.NodeSecret)
+		grpcSrv := grpcserver.New(ch, maria, tokenCache, producer, cfg.NodeSecret)
 		grpcserver.Start(grpcSrv, ":"+cfg.GRPCPort)
 	}
 
 	authHandler    := handler.NewAuth(maria, cfg.JWTSecret, stripeSvc)
-	probeHandler   := handler.NewProbe(ch, cfg.NodeSecret)
+	probeHandler   := handler.NewProbe(ch, cfg.NodeSecret, producer)
 	hostHandler    := handler.NewHost(maria, ch, tokenCache)
 	billingHandler := handler.NewBilling(maria, stripeSvc, cfg.AppBaseURL, cfg.StripeStarterPriceID, cfg.StripeProPriceID)
 	adminHandler   := handler.NewAdmin(maria)
@@ -92,7 +105,7 @@ func main() {
 		v1.POST("/billing/webhook", billingHandler.Webhook)
 
 		// Agent ingest — Bearer agent token (HTTP fallback for Phase 5 migration)
-		v1.POST("/ingest", middleware.Auth(maria, tokenCache), handler.NewIngest(ch).Handle)
+		v1.POST("/ingest", middleware.Auth(maria, tokenCache), handler.NewIngest(ch, producer).Handle)
 
 		// Probe node ingest — NODE_SECRET header
 		v1.POST("/probe", probeHandler.Ingest)

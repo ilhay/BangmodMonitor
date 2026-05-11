@@ -4,6 +4,7 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/bangmodmonitor/api/mq"
 	"github.com/bangmodmonitor/api/storage"
 	"github.com/gin-gonic/gin"
 )
@@ -11,10 +12,11 @@ import (
 type ProbeHandler struct {
 	ch         *storage.CH
 	nodeSecret string
+	producer   *mq.Producer
 }
 
-func NewProbe(ch *storage.CH, nodeSecret string) *ProbeHandler {
-	return &ProbeHandler{ch: ch, nodeSecret: nodeSecret}
+func NewProbe(ch *storage.CH, nodeSecret string, producer *mq.Producer) *ProbeHandler {
+	return &ProbeHandler{ch: ch, nodeSecret: nodeSecret, producer: producer}
 }
 
 type probePayload struct {
@@ -48,7 +50,7 @@ func (h *ProbeHandler) Ingest(c *gin.Context) {
 		if r.IsUp {
 			isUp = 1
 		}
-		_ = h.ch.InsertProbeResult(c.Request.Context(), storage.ProbeRow{
+		row := mq.ProbeResultMsg{
 			Timestamp:  ts,
 			HostID:     "probe",
 			TargetURL:  r.URL,
@@ -56,7 +58,16 @@ func (h *ProbeHandler) Ingest(c *gin.Context) {
 			StatusCode: uint16(r.StatusCode),
 			ResponseMS: uint32(r.ResponseMS),
 			IsUp:       isUp,
-		})
+		}
+		if h.producer.Enabled() {
+			data, _ := mq.Marshal(row)
+			h.producer.Publish(c.Request.Context(), mq.TopicProbeResults, []byte(r.URL), data)
+		} else {
+			_ = h.ch.InsertProbeResult(c.Request.Context(), storage.ProbeRow{
+				Timestamp: row.Timestamp, HostID: row.HostID, TargetURL: row.TargetURL,
+				Region: row.Region, StatusCode: row.StatusCode, ResponseMS: row.ResponseMS, IsUp: row.IsUp,
+			})
+		}
 	}
 
 	c.JSON(http.StatusOK, gin.H{"status": "ok", "stored": len(payload.Results)})

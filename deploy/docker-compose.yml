@@ -1,5 +1,42 @@
 services:
 
+  redpanda:
+    image: docker.redpanda.com/redpandadata/redpanda:v24.1.8
+    command:
+      - redpanda
+      - start
+      - --smp 1
+      - --memory 512M
+      - --mode dev-container
+      - --kafka-addr internal://0.0.0.0:9092,external://0.0.0.0:19092
+      - --advertise-kafka-addr internal://redpanda:9092,external://localhost:19092
+      - --set redpanda.auto_create_topics_enabled=true
+      - --set redpanda.default_topic_replications=1
+      - --set redpanda.log_segment_ms=86400000
+    ports:
+      - "19092:19092"   # External Kafka API (host access)
+      - "19644:9644"    # Admin HTTP API
+    volumes:
+      - redpanda_data:/var/lib/redpanda/data
+    healthcheck:
+      test: ["CMD-SHELL", "rpk cluster health | grep -E 'Healthy.*true' || exit 1"]
+      interval: 10s
+      retries: 15
+
+  consumer:
+    build:
+      context: ../consumer
+      dockerfile: Dockerfile
+    environment:
+      REDPANDA_BROKERS: "redpanda:9092"
+      CLICKHOUSE_DSN: "clickhouse://default:@clickhouse:9000/bangmod"
+      CONSUMER_GROUP: "bangmod-clickhouse-writer"
+    depends_on:
+      redpanda:
+        condition: service_healthy
+      clickhouse:
+        condition: service_healthy
+
   mariadb:
     image: mariadb:11-noble
     environment:
@@ -54,6 +91,7 @@ services:
       MARIADB_DSN: "bangmod:bangmod@tcp(mariadb:3306)/bangmod?parseTime=true&charset=utf8mb4"
       CLICKHOUSE_DSN: "clickhouse://default:@clickhouse:9000/bangmod"
       REDIS_ADDR: "redis:6379"
+      REDPANDA_BROKERS: "redpanda:9092"
     ports:
       - "8080:8080"
       - "9090:9090"
@@ -63,6 +101,8 @@ services:
       clickhouse:
         condition: service_healthy
       redis:
+        condition: service_healthy
+      redpanda:
         condition: service_healthy
 
   dashboard:
@@ -135,3 +175,4 @@ volumes:
   maria_data:
   ch_data:
   redis_data:
+  redpanda_data:

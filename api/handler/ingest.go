@@ -4,16 +4,18 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/bangmodmonitor/api/mq"
 	"github.com/bangmodmonitor/api/storage"
 	"github.com/gin-gonic/gin"
 )
 
 type IngestHandler struct {
-	ch *storage.CH
+	ch       *storage.CH
+	producer *mq.Producer
 }
 
-func NewIngest(ch *storage.CH) *IngestHandler {
-	return &IngestHandler{ch: ch}
+func NewIngest(ch *storage.CH, producer *mq.Producer) *IngestHandler {
+	return &IngestHandler{ch: ch, producer: producer}
 }
 
 type ingestPayload struct {
@@ -21,12 +23,12 @@ type ingestPayload struct {
 }
 
 type agentMetrics struct {
-	Timestamp int64          `json:"timestamp"`
-	Hostname  string         `json:"hostname"`
-	CPU       cpuMetric      `json:"cpu"`
-	Memory    memMetric      `json:"memory"`
-	Disks     []diskMetric   `json:"disks"`
-	Networks  []netMetric    `json:"networks"`
+	Timestamp int64        `json:"timestamp"`
+	Hostname  string       `json:"hostname"`
+	CPU       cpuMetric    `json:"cpu"`
+	Memory    memMetric    `json:"memory"`
+	Disks     []diskMetric `json:"disks"`
+	Networks  []netMetric  `json:"networks"`
 }
 
 type cpuMetric struct {
@@ -64,7 +66,7 @@ func (h *IngestHandler) Handle(c *gin.Context) {
 	m := payload.Metrics
 	ts := time.Unix(m.Timestamp, 0)
 
-	if err := h.ch.InsertAgentMetric(c.Request.Context(), storage.AgentMetricRow{
+	msg := mq.AgentMetricMsg{
 		Timestamp:  ts,
 		HostID:     hostID,
 		Hostname:   m.Hostname,
@@ -74,34 +76,57 @@ func (h *IngestHandler) Handle(c *gin.Context) {
 		MemTotal:   m.Memory.TotalBytes,
 		MemUsed:    m.Memory.UsedBytes,
 		MemPercent: float32(m.Memory.UsagePercent),
-	}); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "store failed"})
-		return
 	}
-
-	var diskRows []storage.DiskRow
 	for _, d := range m.Disks {
-		diskRows = append(diskRows, storage.DiskRow{
-			Timestamp: ts, HostID: hostID,
+		msg.Disks = append(msg.Disks, mq.DiskMsg{
 			Path: d.Path, TotalBytes: d.TotalBytes,
 			UsedBytes: d.UsedBytes, UsePct: float32(d.UsagePercent),
 		})
 	}
-	if len(diskRows) > 0 {
-		_ = h.ch.InsertDiskMetrics(c.Request.Context(), diskRows)
-	}
-
-	var netRows []storage.NetRow
 	for _, n := range m.Networks {
-		netRows = append(netRows, storage.NetRow{
-			Timestamp: ts, HostID: hostID,
+		msg.Networks = append(msg.Networks, mq.NetMsg{
 			Interface: n.Interface, BytesSent: n.BytesSent,
 			BytesRecv: n.BytesRecv, PacketsSent: n.PacketsSent,
 			PacketsRecv: n.PacketsRecv,
 		})
 	}
-	if len(netRows) > 0 {
-		_ = h.ch.InsertNetMetrics(c.Request.Context(), netRows)
+
+	if h.producer.Enabled() {
+		// Phase 6+: async publish to Redpanda, consumer writes to ClickHouse
+		data, _ := mq.Marshal(msg)
+		h.producer.Publish(c.Request.Context(), mq.TopicAgentMetrics, []byte(hostID), data)
+	} else {
+		// Fallback: direct ClickHouse write (Phase 1-5 behavior)
+		if err := h.ch.InsertAgentMetric(c.Request.Context(), storage.AgentMetricRow{
+			Timestamp: ts, HostID: hostID, Hostname: m.Hostname, Region: "default",
+			CPUPercent: float32(m.CPU.UsagePercent), CPUCores: uint8(m.CPU.Cores),
+			MemTotal: m.Memory.TotalBytes, MemUsed: m.Memory.UsedBytes,
+			MemPercent: float32(m.Memory.UsagePercent),
+		}); err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "store failed"})
+			return
+		}
+		var diskRows []storage.DiskRow
+		for _, d := range m.Disks {
+			diskRows = append(diskRows, storage.DiskRow{
+				Timestamp: ts, HostID: hostID, Path: d.Path,
+				TotalBytes: d.TotalBytes, UsedBytes: d.UsedBytes, UsePct: float32(d.UsagePercent),
+			})
+		}
+		if len(diskRows) > 0 {
+			_ = h.ch.InsertDiskMetrics(c.Request.Context(), diskRows)
+		}
+		var netRows []storage.NetRow
+		for _, n := range m.Networks {
+			netRows = append(netRows, storage.NetRow{
+				Timestamp: ts, HostID: hostID, Interface: n.Interface,
+				BytesSent: n.BytesSent, BytesRecv: n.BytesRecv,
+				PacketsSent: n.PacketsSent, PacketsRecv: n.PacketsRecv,
+			})
+		}
+		if len(netRows) > 0 {
+			_ = h.ch.InsertNetMetrics(c.Request.Context(), netRows)
+		}
 	}
 
 	c.JSON(http.StatusOK, gin.H{"status": "ok"})

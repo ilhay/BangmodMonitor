@@ -13,6 +13,7 @@ import (
 
 	bangmodv1 "github.com/bangmodmonitor/gen/bangmod/v1"
 	"github.com/bangmodmonitor/api/cache"
+	"github.com/bangmodmonitor/api/mq"
 	"github.com/bangmodmonitor/api/storage"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
@@ -25,11 +26,12 @@ type MetricsServer struct {
 	ch         *storage.CH
 	maria      *storage.Maria
 	tokenCache *cache.TokenCache
+	producer   *mq.Producer
 	nodeSecret string
 }
 
-func New(ch *storage.CH, maria *storage.Maria, tc *cache.TokenCache, nodeSecret string) *MetricsServer {
-	return &MetricsServer{ch: ch, maria: maria, tokenCache: tc, nodeSecret: nodeSecret}
+func New(ch *storage.CH, maria *storage.Maria, tc *cache.TokenCache, producer *mq.Producer, nodeSecret string) *MetricsServer {
+	return &MetricsServer{ch: ch, maria: maria, tokenCache: tc, producer: producer, nodeSecret: nodeSecret}
 }
 
 // Start launches the gRPC server on addr (e.g. ":9090") in a goroutine.
@@ -85,35 +87,49 @@ func (s *MetricsServer) IngestMetrics(ctx context.Context, req *bangmodv1.Ingest
 		memPct = float32(m.Memory.UsagePercent)
 	}
 
-	if err := s.ch.InsertAgentMetric(ctx, storage.AgentMetricRow{
+	msg := mq.AgentMetricMsg{
 		Timestamp: ts, HostID: hostID, Hostname: m.Hostname, Region: "grpc",
 		CPUPercent: cpuPct, CPUCores: cpuCores,
 		MemTotal: memTotal, MemUsed: memUsed, MemPercent: memPct,
-	}); err != nil {
-		return nil, status.Errorf(codes.Internal, "store: %v", err)
 	}
-
-	var diskRows []storage.DiskRow
 	for _, d := range m.Disks {
-		diskRows = append(diskRows, storage.DiskRow{
-			Timestamp: ts, HostID: hostID, Path: d.Path,
-			TotalBytes: d.TotalBytes, UsedBytes: d.UsedBytes, UsePct: float32(d.UsagePercent),
+		msg.Disks = append(msg.Disks, mq.DiskMsg{
+			Path: d.Path, TotalBytes: d.TotalBytes, UsedBytes: d.UsedBytes, UsePct: float32(d.UsagePercent),
 		})
 	}
-	if len(diskRows) > 0 {
-		_ = s.ch.InsertDiskMetrics(ctx, diskRows)
-	}
-
-	var netRows []storage.NetRow
 	for _, n := range m.Networks {
-		netRows = append(netRows, storage.NetRow{
-			Timestamp: ts, HostID: hostID, Interface: n.Interface,
-			BytesSent: n.BytesSent, BytesRecv: n.BytesRecv,
+		msg.Networks = append(msg.Networks, mq.NetMsg{
+			Interface: n.Interface, BytesSent: n.BytesSent, BytesRecv: n.BytesRecv,
 			PacketsSent: n.PacketsSent, PacketsRecv: n.PacketsRecv,
 		})
 	}
-	if len(netRows) > 0 {
-		_ = s.ch.InsertNetMetrics(ctx, netRows)
+
+	if s.producer.Enabled() {
+		data, _ := mq.Marshal(msg)
+		s.producer.Publish(ctx, mq.TopicAgentMetrics, []byte(hostID), data)
+	} else {
+		if err := s.ch.InsertAgentMetric(ctx, storage.AgentMetricRow{
+			Timestamp: ts, HostID: hostID, Hostname: m.Hostname, Region: "grpc",
+			CPUPercent: cpuPct, CPUCores: cpuCores, MemTotal: memTotal, MemUsed: memUsed, MemPercent: memPct,
+		}); err != nil {
+			return nil, status.Errorf(codes.Internal, "store: %v", err)
+		}
+		var diskRows []storage.DiskRow
+		for _, d := range m.Disks {
+			diskRows = append(diskRows, storage.DiskRow{Timestamp: ts, HostID: hostID, Path: d.Path,
+				TotalBytes: d.TotalBytes, UsedBytes: d.UsedBytes, UsePct: float32(d.UsagePercent)})
+		}
+		if len(diskRows) > 0 {
+			_ = s.ch.InsertDiskMetrics(ctx, diskRows)
+		}
+		var netRows []storage.NetRow
+		for _, n := range m.Networks {
+			netRows = append(netRows, storage.NetRow{Timestamp: ts, HostID: hostID, Interface: n.Interface,
+				BytesSent: n.BytesSent, BytesRecv: n.BytesRecv, PacketsSent: n.PacketsSent, PacketsRecv: n.PacketsRecv})
+		}
+		if len(netRows) > 0 {
+			_ = s.ch.InsertNetMetrics(ctx, netRows)
+		}
 	}
 
 	return &bangmodv1.IngestResponse{Ok: true, Message: "stored"}, nil
