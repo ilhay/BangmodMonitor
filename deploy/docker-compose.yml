@@ -110,7 +110,7 @@ services:
       context: ../dashboard
       dockerfile: Dockerfile
     ports:
-      - "3000:80"
+      - "3001:3000"
     depends_on:
       - api
 
