@@ -1,0 +1,79 @@
+syntax = "proto3";
+
+package bangmod.v1;
+
+option go_package = "github.com/bangmodmonitor/proto/bangmod/v1;bangmodv1";
+
+// MetricsService receives metrics pushed by agents and probe nodes.
+service MetricsService {
+  rpc IngestMetrics(IngestRequest) returns (IngestResponse);
+  rpc IngestProbe(ProbeRequest)   returns (IngestResponse);
+}
+
+message IngestRequest {
+  string        token   = 1;
+  AgentMetrics  metrics = 2;
+}
+
+message IngestResponse {
+  bool   ok      = 1;
+  string message = 2;
+}
+
+message AgentMetrics {
+  int64              timestamp = 1;
+  string             hostname  = 2;
+  CpuMetric          cpu       = 3;
+  MemoryMetric       memory    = 4;
+  repeated DiskMetric   disks    = 5;
+  repeated NetworkMetric networks = 6;
+  AppStatus          apps      = 7;
+}
+
+message CpuMetric {
+  double usage_percent = 1;
+  int32  cores         = 2;
+}
+
+message MemoryMetric {
+  uint64 total_bytes   = 1;
+  uint64 used_bytes    = 2;
+  double usage_percent = 3;
+}
+
+message DiskMetric {
+  string path          = 1;
+  uint64 total_bytes   = 2;
+  uint64 used_bytes    = 3;
+  double usage_percent = 4;
+}
+
+message NetworkMetric {
+  string interface    = 1;
+  uint64 bytes_sent   = 2;
+  uint64 bytes_recv   = 3;
+  uint64 packets_sent = 4;
+  uint64 packets_recv = 5;
+}
+
+message AppStatus {
+  bool nginx      = 1;
+  bool apache     = 2;
+  bool mysql      = 3;
+  bool mariadb    = 4;
+  bool postgresql = 5;
+}
+
+message ProbeRequest {
+  string               region  = 1;
+  string               node_secret = 2;
+  repeated ProbeResult results = 3;
+}
+
+message ProbeResult {
+  string url         = 1;
+  int32  status_code = 2;
+  int64  response_ms = 3;
+  bool   is_up       = 4;
+  string error       = 5;
+}

@@ -1,24 +1,36 @@
 package handler
 
 import (
+	"context"
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
 	"net/http"
 
+	"github.com/bangmodmonitor/api/cache"
 	"github.com/bangmodmonitor/api/storage"
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
 )
 
 type HostHandler struct {
-	maria *storage.Maria
-	ch    *storage.CH
+	maria      *storage.Maria
+	ch         *storage.CH
+	tokenCache *cache.TokenCache
 }
 
-func NewHost(maria *storage.Maria, ch *storage.CH) *HostHandler {
-	return &HostHandler{maria: maria, ch: ch}
+func NewHost(maria *storage.Maria, ch *storage.CH, tc *cache.TokenCache) *HostHandler {
+	return &HostHandler{maria: maria, ch: ch, tokenCache: tc}
+}
+
+// invalidateToken removes a plain token from the Redis cache immediately.
+func (h *HostHandler) invalidateToken(ctx context.Context, plainToken string) {
+	if plainToken == "" {
+		return
+	}
+	sum := sha256.Sum256([]byte(plainToken))
+	h.tokenCache.Delete(ctx, fmt.Sprintf("%x", sum))
 }
 
 func (h *HostHandler) List(c *gin.Context) {

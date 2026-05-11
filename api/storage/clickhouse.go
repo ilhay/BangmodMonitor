@@ -82,6 +82,55 @@ func (ch *CH) Migrate(ctx context.Context) error {
 		PARTITION BY toYYYYMM(timestamp)
 		ORDER BY (host_id, region, timestamp)
 		TTL timestamp + INTERVAL 30 DAY`,
+
+		// ── Materialized views for fast dashboard queries (Phase 5) ──────────
+
+		// Per-minute rollup: avg CPU + memory per host
+		`CREATE MATERIALIZED VIEW IF NOT EXISTS bangmod.agent_metrics_1m
+		ENGINE = AggregatingMergeTree()
+		PARTITION BY toYYYYMM(ts_minute)
+		ORDER BY (host_id, ts_minute)
+		TTL ts_minute + INTERVAL 90 DAY
+		AS SELECT
+			host_id,
+			toStartOfMinute(timestamp) AS ts_minute,
+			avgState(cpu_percent)      AS cpu_avg_state,
+			avgState(mem_percent)      AS mem_avg_state,
+			maxState(cpu_percent)      AS cpu_max_state,
+			maxState(mem_percent)      AS mem_max_state
+		FROM bangmod.agent_metrics
+		GROUP BY host_id, ts_minute`,
+
+		// Per-hour rollup: for longer time ranges
+		`CREATE MATERIALIZED VIEW IF NOT EXISTS bangmod.agent_metrics_1h
+		ENGINE = AggregatingMergeTree()
+		PARTITION BY toYYYYMM(ts_hour)
+		ORDER BY (host_id, ts_hour)
+		TTL ts_hour + INTERVAL 365 DAY
+		AS SELECT
+			host_id,
+			toStartOfHour(timestamp) AS ts_hour,
+			avgState(cpu_percent)    AS cpu_avg_state,
+			avgState(mem_percent)    AS mem_avg_state,
+			maxState(cpu_percent)    AS cpu_max_state,
+			maxState(mem_percent)    AS mem_max_state
+		FROM bangmod.agent_metrics
+		GROUP BY host_id, ts_hour`,
+
+		// Per-minute probe uptime rollup
+		`CREATE MATERIALIZED VIEW IF NOT EXISTS bangmod.probe_results_1m
+		ENGINE = AggregatingMergeTree()
+		PARTITION BY toYYYYMM(ts_minute)
+		ORDER BY (target_url, region, ts_minute)
+		TTL ts_minute + INTERVAL 90 DAY
+		AS SELECT
+			target_url,
+			region,
+			toStartOfMinute(timestamp) AS ts_minute,
+			avgState(toFloat32(is_up)) AS uptime_state,
+			avgState(response_ms)      AS resp_ms_avg_state
+		FROM bangmod.probe_results
+		GROUP BY target_url, region, ts_minute`,
 	}
 
 	for _, q := range queries {
@@ -247,6 +296,37 @@ func (ch *CH) QueryProbeResults(ctx context.Context, url, region string, limit i
 		results = append(results, r)
 	}
 	return results, rows.Err()
+}
+
+// QueryRollupMetrics queries the per-minute materialized view for fast dashboard rendering.
+// Falls back to raw table if the rollup has no data yet.
+func (ch *CH) QueryRollupMetrics(ctx context.Context, hostID string, limit int) ([]MetricPoint, error) {
+	rows, err := ch.conn.Query(ctx,
+		`SELECT ts_minute, avgMerge(cpu_avg_state), avgMerge(mem_avg_state)
+		 FROM bangmod.agent_metrics_1m
+		 WHERE host_id = ?
+		 GROUP BY ts_minute
+		 ORDER BY ts_minute DESC
+		 LIMIT ?`,
+		hostID, limit,
+	)
+	if err != nil {
+		return ch.QueryRecentMetrics(ctx, hostID, limit) // fallback
+	}
+	defer rows.Close()
+
+	var points []MetricPoint
+	for rows.Next() {
+		var p MetricPoint
+		if err := rows.Scan(&p.Timestamp, &p.CPUPercent, &p.MemPercent); err != nil {
+			return nil, err
+		}
+		points = append(points, p)
+	}
+	if len(points) == 0 {
+		return ch.QueryRecentMetrics(ctx, hostID, limit) // fallback to raw
+	}
+	return points, rows.Err()
 }
 
 func (ch *CH) Close() error {

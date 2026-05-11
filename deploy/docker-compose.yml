@@ -16,6 +16,18 @@ services:
       interval: 5s
       retries: 15
 
+  redis:
+    image: redis:7-alpine
+    command: redis-server --save 60 1 --loglevel warning
+    volumes:
+      - redis_data:/data
+    ports:
+      - "6380:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      retries: 10
+
   clickhouse:
     image: clickhouse/clickhouse-server:24.6-alpine
     environment:
@@ -38,14 +50,19 @@ services:
       dockerfile: Dockerfile
     environment:
       HTTP_PORT: "8080"
+      GRPC_PORT: "9090"
       MARIADB_DSN: "bangmod:bangmod@tcp(mariadb:3306)/bangmod?parseTime=true&charset=utf8mb4"
       CLICKHOUSE_DSN: "clickhouse://default:@clickhouse:9000/bangmod"
+      REDIS_ADDR: "redis:6379"
     ports:
       - "8080:8080"
+      - "9090:9090"
     depends_on:
       mariadb:
         condition: service_healthy
       clickhouse:
+        condition: service_healthy
+      redis:
         condition: service_healthy
 
   dashboard:
@@ -117,3 +134,4 @@ services:
 volumes:
   maria_data:
   ch_data:
+  redis_data:

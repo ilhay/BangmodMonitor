@@ -8,6 +8,8 @@ type Config struct {
 	MariaDSN      string
 	NodeSecret    string
 	JWTSecret     string
+	RedisAddr     string // e.g. localhost:6379; empty = Redis disabled
+	GRPCPort      string // gRPC listen port; empty = gRPC disabled
 
 	// Stripe
 	StripeSecretKey      string
@@ -25,6 +27,8 @@ func Load() *Config {
 		MariaDSN:      getEnv("MARIADB_DSN", "bangmod:bangmod@tcp(localhost:3306)/bangmod?parseTime=true&charset=utf8mb4"),
 		NodeSecret:    getEnv("NODE_SECRET", ""),
 		JWTSecret:     getEnv("JWT_SECRET", "change-me-in-production"),
+		RedisAddr:     getEnv("REDIS_ADDR", ""),
+		GRPCPort:      getEnv("GRPC_PORT", "9090"),
 
 		StripeSecretKey:      getEnv("STRIPE_SECRET_KEY", ""),
 		StripeWebhookSecret:  getEnv("STRIPE_WEBHOOK_SECRET", ""),

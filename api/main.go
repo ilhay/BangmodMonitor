@@ -6,7 +6,9 @@ import (
 	"net/http"
 
 	"github.com/bangmodmonitor/api/billing"
+	"github.com/bangmodmonitor/api/cache"
 	"github.com/bangmodmonitor/api/config"
+	"github.com/bangmodmonitor/api/grpcserver"
 	"github.com/bangmodmonitor/api/handler"
 	"github.com/bangmodmonitor/api/middleware"
 	"github.com/bangmodmonitor/api/storage"
@@ -37,6 +39,19 @@ func main() {
 		log.Fatalf("clickhouse migrate: %v", err)
 	}
 
+	// Redis token cache (optional — gracefully disabled if REDIS_ADDR is empty)
+	tokenCache := cache.NewTokenCache(cfg.RedisAddr)
+	if tokenCache.Enabled() {
+		if err := tokenCache.Ping(ctx); err != nil {
+			log.Printf("WARNING: Redis ping failed (%v) — falling back to DB-only token validation", err)
+		} else {
+			log.Printf("Redis token cache: connected to %s", cfg.RedisAddr)
+		}
+	} else {
+		log.Println("Redis token cache: disabled (set REDIS_ADDR to enable)")
+	}
+
+	// Stripe
 	stripeSvc := billing.NewStripe(cfg.StripeSecretKey, cfg.StripeWebhookSecret, cfg.StripeRegionPriceID)
 	if stripeSvc.Enabled() {
 		log.Println("Stripe integration: enabled")
@@ -44,44 +59,50 @@ func main() {
 		log.Println("Stripe integration: disabled (set STRIPE_SECRET_KEY to enable)")
 	}
 
+	// gRPC server (runs alongside HTTP on a separate port)
+	if cfg.GRPCPort != "" {
+		grpcSrv := grpcserver.New(ch, maria, tokenCache, cfg.NodeSecret)
+		grpcserver.Start(grpcSrv, ":"+cfg.GRPCPort)
+	}
+
 	authHandler    := handler.NewAuth(maria, cfg.JWTSecret, stripeSvc)
 	probeHandler   := handler.NewProbe(ch, cfg.NodeSecret)
-	hostHandler    := handler.NewHost(maria, ch)
+	hostHandler    := handler.NewHost(maria, ch, tokenCache)
 	billingHandler := handler.NewBilling(maria, stripeSvc, cfg.AppBaseURL, cfg.StripeStarterPriceID, cfg.StripeProPriceID)
 	adminHandler   := handler.NewAdmin(maria)
 
 	r := gin.Default()
 
 	r.GET("/health", func(c *gin.Context) {
-		c.JSON(http.StatusOK, gin.H{"status": "ok"})
+		c.JSON(http.StatusOK, gin.H{
+			"status":       "ok",
+			"redis_cache":  tokenCache.Enabled(),
+			"grpc_port":    cfg.GRPCPort,
+		})
 	})
 
 	v1 := r.Group("/api/v1")
 	{
-		// Public auth routes
 		auth := v1.Group("/auth")
 		{
 			auth.POST("/register", authHandler.Register)
 			auth.POST("/login", authHandler.Login)
 		}
 
-		// Stripe webhook — must be public (no JWT), raw body needed
 		v1.POST("/billing/webhook", billingHandler.Webhook)
 
-		// Agent ingest — Bearer agent token
-		v1.POST("/ingest", middleware.Auth(maria), handler.NewIngest(ch).Handle)
+		// Agent ingest — Bearer agent token (HTTP fallback for Phase 5 migration)
+		v1.POST("/ingest", middleware.Auth(maria, tokenCache), handler.NewIngest(ch).Handle)
 
 		// Probe node ingest — NODE_SECRET header
 		v1.POST("/probe", probeHandler.Ingest)
 		v1.GET("/probe/results", probeHandler.Recent)
 
-		// Customer routes — JWT required
 		customer := v1.Group("/")
 		customer.Use(middleware.RequireAuth(cfg.JWTSecret))
 		{
 			customer.GET("/me", authHandler.Me)
 
-			// Host management
 			hosts := customer.Group("/hosts")
 			{
 				hosts.GET("", hostHandler.List)
@@ -91,7 +112,6 @@ func main() {
 				hosts.GET("/:id/metrics", hostHandler.Metrics)
 			}
 
-			// Billing
 			bill := customer.Group("/billing")
 			{
 				bill.GET("/overview", billingHandler.Overview)
@@ -103,7 +123,6 @@ func main() {
 				bill.GET("/invoices", billingHandler.Invoices)
 			}
 
-			// Admin — superadmin role enforced inside handlers
 			admin := customer.Group("/admin")
 			{
 				admin.GET("/orgs", adminHandler.ListOrgs)
@@ -112,7 +131,7 @@ func main() {
 		}
 	}
 
-	log.Printf("API server listening on :%s", cfg.HTTPPort)
+	log.Printf("HTTP server listening on :%s", cfg.HTTPPort)
 	if err := r.Run(":" + cfg.HTTPPort); err != nil {
 		log.Fatalf("server: %v", err)
 	}
